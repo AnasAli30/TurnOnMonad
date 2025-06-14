@@ -19,6 +19,7 @@ const frame = {
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
+    metadataBase: new URL(APP_URL || 'http://localhost:3000'),
     title: 'Monad Farcaster MiniApp Template',
     openGraph: {
       title: 'Monad Farcaster MiniApp Template',

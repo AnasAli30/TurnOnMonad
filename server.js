@@ -72,6 +72,7 @@ io.on('connection', (socket) => {
 
 // --- Smart contract endpoints ---
 app.post('/api/end-game', async (req, res) => {
+  console.log('end-game', req.body);
   const { roomId, winner } = req.body;
   try {
     const tx = await contract.endGame(roomId, winner);

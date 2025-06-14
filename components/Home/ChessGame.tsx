@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import io from 'socket.io-client';
 import { Chessboard } from 'react-chessboard';
+import Chess3D from './Chess3D';
 import { useFrame } from '@/components/farcaster-provider';
 import { farcasterFrame } from '@farcaster/frame-wagmi-connector';
 import { parseEther, encodeFunctionData } from 'viem';
@@ -46,7 +47,7 @@ function getGameStatus(result: string) {
 // Add this function to call the backend API for end-game payout
 async function endGameOnChain(roomId: string, winner: string) {
   try {
-    const res = await fetch('/api/end-game', {
+    const res = await fetch('http://localhost:3001/api/end-game', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roomId, winner }),
@@ -112,7 +113,7 @@ function generateRoomId() {
 }
 
 export default function ChessGame() {
-  const { context } = useFrame();
+  const { context, actions } = useFrame();
   const [fen, setFen] = useState<string>('start');
   const [color, setColor] = useState<'white' | 'black'>('white');
   
@@ -128,6 +129,8 @@ export default function ChessGame() {
   const { switchChain } = useSwitchChain();
   const { isEthProviderAvailable } = useFrame();
   const [lastMove, setLastMove] = useState<{from: string, to: string} | null>(null);
+  const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
+  const [use3D, setUse3D] = useState<boolean>(true);
   const [betAmount, setBetAmount] = useState<string>('');
   const { sendTransaction, isPending } = useSendTransaction();
   const [showBetInput, setShowBetInput] = useState(false);
@@ -139,6 +142,7 @@ export default function ChessGame() {
   
   const [playerAddresses, setPlayerAddresses] = useState<{ white?: string; black?: string }>({});
   const [showWallet, setShowWallet] = useState(false);
+  const [opponentContext, setOpponentContext] = useState<any>(null);
 
   const {
     data: roomInfoData,
@@ -152,54 +156,92 @@ export default function ChessGame() {
     args: [joinRoomId],
   });
 
+  // Move handleGameover out of useEffect
+  const handleGameover = async ({ result }: GameoverPayload) => {
+    setGameResult(result);
+    const status = getGameStatus(result);
+    let winnerAddress = '';
+    let winnerColor: 'white' | 'black' | null = null;
+    if (result === '1-0') {
+      winnerAddress = playerAddresses.white || '';
+      winnerColor = 'white';
+    } else if (result === '0-1') {
+      winnerAddress = playerAddresses.black || '';
+      winnerColor = 'black';
+    }
+    // Only the winner's client triggers the cast
+    if (winnerAddress && address?.toLowerCase() === winnerAddress.toLowerCase()) {
+      await endGameOnChain(roomId, winnerAddress);
+      // Compose Farcaster cast if possible
+      if (actions && context?.user) {
+        // Winner info
+        const winnerName = context.user.displayName || context.user.username || 'Winner';
+        const winnerUsername = context.user.username || '';
+        // Loser info (from opponentContext)
+        let loserName = 'Opponent';
+        let loserUsername = '';
+        if (opponentContext?.displayName || opponentContext?.username) {
+          loserName = opponentContext.displayName || opponentContext.username;
+          loserUsername = opponentContext.username || '';
+        }
+        // Fallback: if opponentContext is not set, use color logic
+        if (!opponentContext && context.user) {
+          if (winnerColor === 'white' && color === 'white') {
+            loserName = 'Black Player';
+          } else if (winnerColor === 'black' && color === 'black') {
+            loserName = 'White Player';
+          }
+        }
+        const castText = `🏆 ${winnerName} (@${winnerUsername}) won against ${loserName}${loserUsername ? ` (@${loserUsername})` : ''} in Chess Arena!`;
+        try {
+          await actions.composeCast({
+            text: castText,
+            embeds: ['https://chessarena.monad.games/'],
+          });
+        } catch (err) {
+          // Optionally handle error
+        }
+      }
+    }
+    setTimeout(() => {
+      if (confirm(`${status.message} Would you like to play again?`)) {
+        setInGame(false);
+        setMode('choose');
+        setGameResult('');
+        setRoomId('');
+        setFen('start');
+        setPlayers(0);
+      }
+    }, 500);
+  };
+
   useEffect(() => {
     if (!inGame || !roomId) return;
-    
+
     const handleInit = ({ fen, color }: InitPayload) => { 
       setFen(fen); 
       setColor(color); 
       // Track player address for this color
       setPlayerAddresses(prev => ({ ...prev, [color]: address }));
+      // Try to set opponent context if available from socket.io (not implemented here)
     };
-    
+
     const handleMove = ({ fen }: MovePayload) => {
       setFen(fen);
       setLastMove(null); // Reset last move highlight
     };
-    
-    const handleGameover = async ({ result }: GameoverPayload) => {
-      setGameResult(result);
-      const status = getGameStatus(result);
-      let winnerAddress = '';
-      if (result === '1-0') {
-        winnerAddress = playerAddresses.white || '';
-      } else if (result === '0-1') {
-        winnerAddress = playerAddresses.black || '';
-      }
-      if (winnerAddress && address?.toLowerCase() === winnerAddress.toLowerCase()) {
-        await endGameOnChain(roomId, winnerAddress);
-      }
-      setTimeout(() => {
-        if (confirm(`${status.message} Would you like to play again?`)) {
-          setInGame(false);
-          setMode('choose');
-          setGameResult('');
-          setRoomId('');
-          setFen('start');
-          setPlayers(0);
-        }
-      }, 500);
-    };
-    
+
+    // Remove handleGameover from here
+
     const handlePlayers = (count: number) => {
       setPlayers(count);
     };
-    
+
     socket.on('init', handleInit);
     socket.on('move', handleMove);
     socket.on('gameover', handleGameover);
     socket.on('players', handlePlayers);
-    
+
     return () => {
       socket.off('init', handleInit);
       socket.off('move', handleMove);
@@ -211,6 +253,23 @@ export default function ChessGame() {
   const onDrop: DropHandler = (sourceSquare, targetSquare) => {
     socket.emit('move', { roomId, from: sourceSquare, to: targetSquare });
     return true;
+  };
+
+  // Handle 3D chess square clicks
+  const handleSquareClick = (square: string) => {
+    if (!isMyTurn) return;
+    
+    if (selectedSquare === null) {
+      // First click - select piece
+      setSelectedSquare(square);
+    } else if (selectedSquare === square) {
+      // Click same square - deselect
+      setSelectedSquare(null);
+    } else {
+      // Second click - try to move
+      socket.emit('move', { roomId, from: selectedSquare, to: square });
+      setSelectedSquare(null);
+    }
   };
 
   // Handlers using sendTransaction and encodeFunctionData
@@ -370,7 +429,7 @@ export default function ChessGame() {
               value={betAmount}
               onChange={e => setBetAmount(e.target.value)}
               placeholder="Bet Amount"
-              className="border rounded p-2 w-full text-center"
+              className="border rounded p-2 w-full text-center text-gray-700"
               required
             />
             <button
@@ -403,7 +462,7 @@ export default function ChessGame() {
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">Room Code</label>
               <input
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:ring-4 focus:ring-purple-100 transition-all duration-200 font-mono text-center text-lg uppercase"
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:ring-4 focus:ring-purple-100 transition-all duration-200 font-mono text-center text-lg uppercase text-gray-700"
                 placeholder="Enter room code"
                 value={joinRoomId}
                 onChange={e => setJoinRoomId(e.target.value.toUpperCase())}
@@ -420,7 +479,7 @@ export default function ChessGame() {
                 value={joinBetAmount}
                 onChange={e => setJoinBetAmount(e.target.value)}
                 placeholder="Bet Amount"
-                className="border rounded p-2 w-full text-center"
+                className="border rounded p-2 w-full text-center text-gray-700 "
                 required
               />
             </div>
@@ -459,7 +518,7 @@ export default function ChessGame() {
             Create New Game
           </button>
         )}
-        {createStep === 'roomGenerated' && showBetInput && (
+        {(createStep === 'roomGenerated' || createStep === 'pendingTx') && showBetInput && (
           <>
             <input
               className="border rounded p-2 w-full text-center bg-gray-100"
@@ -475,7 +534,7 @@ export default function ChessGame() {
               value={betAmount}
               onChange={e => setBetAmount(e.target.value)}
               placeholder="Bet Amount (ETH/MON)"
-              className="border rounded p-2 w-full text-center"
+              className="border rounded p-2 w-full text-center text-gray-700"
               required
             />
             <button
@@ -519,7 +578,7 @@ export default function ChessGame() {
               value={joinBetAmount}
               onChange={e => setJoinBetAmount(e.target.value)}
               placeholder="Bet Amount (ETH/MON)"
-              className="border rounded p-2 w-full text-center"
+              className="border rounded p-2 w-full text-center text-gray-700"
               required
             />
             <button
@@ -632,26 +691,7 @@ export default function ChessGame() {
                   <div className="text-2xl mb-2">🏆</div>
                   <h4 className="text-lg font-bold text-gray-800">{getGameStatus(gameResult).message}</h4>
                 </div>
-              ) : (
-                <div className={`p-4 rounded-lg transition-all duration-300 ${
-                  isMyTurn 
-                    ? 'bg-gradient-to-r from-blue-100 to-purple-100 border-2 border-blue-300 shadow-lg' 
-                    : 'bg-gray-50 border-2 border-gray-200'
-                }`}>
-                  <div className="flex items-center justify-center space-x-3">
-                    <span className="text-2xl">{turn === 'white' ? '♔' : '♚'}</span>
-                    <div>
-                      <p className="font-semibold text-gray-800">
-                        {isMyTurn ? '✨ Your Turn!' : 'Opponent\'s Turn'}
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        {turn.charAt(0).toUpperCase() + turn.slice(1)} to move
-                      </p>
-                    </div>
-                    {isMyTurn && <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>}
-                  </div>
-                </div>
-              )}
+              ) : ( <></>)}
             </div>
           )}
         </div>
@@ -659,25 +699,67 @@ export default function ChessGame() {
         {/* Chess Board */}
         <div className="bg-white border-x-2 border-gray-200 p-6">
           {players === 2 ? (
-            <div className="flex justify-center">
+            <div className="flex flex-col items-center">
               <div className={`rounded-2xl p-4 transition-all duration-300 ${
                 isMyTurn 
                   ? 'bg-gradient-to-br from-blue-50 to-purple-50 shadow-2xl border-4 border-blue-300' 
                   : 'bg-gradient-to-br from-gray-50 to-gray-100 shadow-lg border-4 border-gray-300'
               }`}>
-                <Chessboard
-                  position={fen}
-                  onPieceDrop={onDrop}
-                  boardOrientation={color}
-                  boardWidth={Math.min(window.innerWidth - 120, 400)}
-                  customBoardStyle={{
-                    borderRadius: '12px',
-                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)'
-                  }}
-                  customDarkSquareStyle={{ backgroundColor: '#B58863' }}
-                  customLightSquareStyle={{ backgroundColor: '#F0D9B5' }}
-                />
+                {/* 3D/2D Toggle */}
+                <div className="mb-4 flex justify-center">
+                  <button
+                    onClick={() => setUse3D(!use3D)}
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white px-4 py-2 rounded-lg shadow-lg transition-all duration-200 text-sm font-semibold"
+                  >
+                    {use3D ? '🎮 Switch to 2D' : '🌍 Switch to 3D'}
+                  </button>
+                </div>
+                
+                {use3D ? (
+                  <Chess3D
+                    fen={fen}
+                    boardOrientation={color}
+                    onSquareClick={handleSquareClick}
+                    selectedSquare={selectedSquare}
+                    isMyTurn={isMyTurn}
+                  />
+                ) : (
+                  <Chessboard
+                    position={fen}
+                    onPieceDrop={onDrop}
+                    boardOrientation={color}
+                    boardWidth={Math.min(window.innerWidth - 120, 400)}
+                    customBoardStyle={{
+                      borderRadius: '12px',
+                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)'
+                    }}
+                    customDarkSquareStyle={{ backgroundColor: '#B58863' }}
+                    customLightSquareStyle={{ backgroundColor: '#F0D9B5' }}
+                  />
+                )}
               </div>
+              {process.env.NODE_ENV === 'development' && (
+                <div className="flex gap-2 mt-4">
+                  <button
+                    className="bg-green-600 text-white px-4 py-2 rounded"
+                    onClick={() => handleGameover({ result: '1-0' })}
+                  >
+                    Force White Win
+                  </button>
+                  <button
+                    className="bg-black text-white px-4 py-2 rounded"
+                    onClick={() => handleGameover({ result: '0-1' })}
+                  >
+                    Force Black Win
+                  </button>
+                  <button
+                    className="bg-gray-400 text-white px-4 py-2 rounded"
+                    onClick={() => handleGameover({ result: '1/2-1/2' })}
+                  >
+                    Force Draw
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex justify-center items-center h-96 bg-gray-100 rounded-2xl">
