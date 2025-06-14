@@ -13,9 +13,9 @@ export function Demo() {
       </h1>
       <div className="w-full max-w-4xl space-y-6">
         <ChessGame />
-        <User />
+        {/* <User />
         <FarcasterActions />
-        <WalletActions />
+        <WalletActions /> */}
       </div>
     </div>
   )

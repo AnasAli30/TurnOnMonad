@@ -1,9 +1,18 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const dotenv = require('dotenv');
+dotenv.config();
 const { Chess } = require('chess.js'); // npm install chess.js
+const { ethers } = require('ethers');
+const CONTRACT_ABI = [/* ... ABI from user ... */];
+const CONTRACT_ADDRESS = '0x9359c146e36771143B8fE180F34037Fb1297a44E';
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'http://localhost:8545');
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
 const app = express();
+app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
@@ -12,6 +21,7 @@ const games = {}; // { roomId: { chess: ChessInstance, players: [{id, color}] } 
 
 io.on('connection', (socket) => {
   socket.on('join', (roomId) => {
+    console.log('joining room', roomId);
     if (!games[roomId]) {
       games[roomId] = { chess: new Chess(), players: [] };
     }
@@ -38,7 +48,8 @@ io.on('connection', (socket) => {
       const move = game.chess.move({ from, to });
       if (move) {
         io.to(roomId).emit('move', { fen: game.chess.fen() });
-        if (game.chess.game_over()) {('gameover', { result: game.chess.result() });
+        if (game.chess.isGameOver()) {
+          io.to(roomId).emit('gameover', { result: game.chess.result() });
         }
       }
       // If move is null, it's invalid, just ignore
@@ -57,6 +68,18 @@ io.on('connection', (socket) => {
       }
     }
   });
+});
+
+// --- Smart contract endpoints ---
+app.post('/api/end-game', async (req, res) => {
+  const { roomId, winner } = req.body;
+  try {
+    const tx = await contract.endGame(roomId, winner);
+    await tx.wait();
+    res.json({ success: true, txHash: tx.hash });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 server.listen(3001, () => console.log('Server running on port 3001')); 
