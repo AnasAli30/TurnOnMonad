@@ -28,8 +28,8 @@ A Farcaster Mini App built on the Monad testnet, featuring real-time wagered mul
 ### Installation
 
 ```bash
-git clone https://github.com/AnasAli30/monad-blitz-delhi.git
-cd monad-blitz-delhi
+git clone https://github.com/AnasAli30/TurnOnMonad
+cd TurnOnMonad
 npm install # or yarn install
 ```
 
