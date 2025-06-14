@@ -15,6 +15,8 @@ import {
   useReadContract,
 } from 'wagmi';
 import CONTRACT_ABI from '../../contracts/abi.json';
+import { StickyNav } from './StickyNav';
+import { WalletPage } from './WalletPage';
 const CONTRACT_ADDRESS = '0x9359c146e36771143B8fE180F34037Fb1297a44E';
 const socket = io('http://localhost:3001');
 
@@ -113,6 +115,7 @@ export default function ChessGame() {
   const { context } = useFrame();
   const [fen, setFen] = useState<string>('start');
   const [color, setColor] = useState<'white' | 'black'>('white');
+  
   const [players, setPlayers] = useState<number>(0);
   const [roomId, setRoomId] = useState<string>('');
   const [inputRoom, setInputRoom] = useState<string>('');
@@ -133,6 +136,9 @@ export default function ChessGame() {
   const [joinRoomId, setJoinRoomId] = useState('');
   const [joinBetAmount, setJoinBetAmount] = useState('');
   const [createStep, setCreateStep] = useState<'idle' | 'roomGenerated' | 'pendingTx' | 'inGame'>('idle');
+  
+  const [playerAddresses, setPlayerAddresses] = useState<{ white?: string; black?: string }>({});
+  const [showWallet, setShowWallet] = useState(false);
 
   const {
     data: roomInfoData,
@@ -152,6 +158,8 @@ export default function ChessGame() {
     const handleInit = ({ fen, color }: InitPayload) => { 
       setFen(fen); 
       setColor(color); 
+      // Track player address for this color
+      setPlayerAddresses(prev => ({ ...prev, [color]: address }));
     };
     
     const handleMove = ({ fen }: MovePayload) => {
@@ -162,18 +170,13 @@ export default function ChessGame() {
     const handleGameover = async ({ result }: GameoverPayload) => {
       setGameResult(result);
       const status = getGameStatus(result);
-      // Determine winner address (example: white wins = player1, black wins = player2)
       let winnerAddress = '';
       if (result === '1-0') {
-        // White wins
-        // You need to track player addresses for white/black in your app
-        // For demo, prompt for winner address
-        winnerAddress = prompt('Enter winner address (white):') || '';
+        winnerAddress = playerAddresses.white || '';
       } else if (result === '0-1') {
-        // Black wins
-        winnerAddress = prompt('Enter winner address (black):') || '';
+        winnerAddress = playerAddresses.black || '';
       }
-      if (winnerAddress) {
+      if (winnerAddress && address?.toLowerCase() === winnerAddress.toLowerCase()) {
         await endGameOnChain(roomId, winnerAddress);
       }
       setTimeout(() => {
@@ -203,7 +206,7 @@ export default function ChessGame() {
       socket.off('gameover', handleGameover);
       socket.off('players', handlePlayers);
     };
-  }, [inGame, roomId]);
+  }, [inGame, roomId, address]);
 
   const onDrop: DropHandler = (sourceSquare, targetSquare) => {
     socket.emit('move', { roomId, from: sourceSquare, to: targetSquare });
@@ -304,9 +307,12 @@ export default function ChessGame() {
       return (
         <div className="flex flex-col items-center w-full max-w-md mx-auto p-8 bg-gradient-to-br from-blue-50 to-purple-50 rounded-2xl shadow-xl border border-gray-200 space-y-6">
           <div className="flex items-center space-x-3 mb-4">
+          <StickyNav onWalletClick={() => setShowWallet(true)} />
+          {showWallet && <WalletPage onClose={() => setShowWallet(false)} />}
             <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-purple-600 rounded-full flex items-center justify-center">
               <span className="text-white text-2xl">♛</span>
             </div>
+           
             <h2 className="text-2xl font-bold text-gray-800">Chess Arena</h2>
           </div>
           <p className="text-center text-gray-600 mb-6">Challenge your friends to a game of chess!</p>
@@ -558,162 +564,168 @@ export default function ChessGame() {
   }
 
   return (
-    <div className="w-full max-w-2xl mx-auto p-4">
-      {/* Game Header */}
-      <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-t-2xl p-6 text-white">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-              <span className="text-white text-xl">♛</span>
-            </div>
-            <div>
-              <h3 className="text-lg font-bold">Chess Arena</h3>
-              <p className="text-sm text-gray-300">Room: <span className="font-mono text-yellow-400">{roomId}</span></p>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></div>
-            <span className="text-sm">{isConnected ? 'Connected' : 'Disconnected'}</span>
-          </div>
-        </div>
-        
-        {/* Player Info */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white/10 rounded-lg p-3">
-            <div className="flex items-center space-x-2 mb-1">
-              <span className="text-2xl">♔</span>
-              <span className="font-semibold">White</span>
-              {color === 'white' && <span className="text-xs bg-blue-500 px-2 py-1 rounded-full">You</span>}
-            </div>
-            {context?.user && color === 'white' && (
-              <p className="text-xs text-gray-300">{context.user.displayName}</p>
-            )}
-          </div>
-          <div className="bg-white/10 rounded-lg p-3">
-            <div className="flex items-center space-x-2 mb-1">
-              <span className="text-2xl">♚</span>
-              <span className="font-semibold">Black</span>
-              {color === 'black' && <span className="text-xs bg-blue-500 px-2 py-1 rounded-full">You</span>}
-            </div>
-            {context?.user && color === 'black' && (
-              <p className="text-xs text-gray-300">{context.user.displayName}</p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Game Status */}
-      <div className="bg-white border-x-2 border-gray-200 p-4">
-        {players < 2 ? (
-          <div className="text-center py-8">
-            <div className="w-16 h-16 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
-              <span className="text-white text-2xl animate-pulse">⏳</span>
-            </div>
-            <h4 className="text-lg font-semibold text-gray-800 mb-2">Waiting for Opponent</h4>
-            <p className="text-gray-600 mb-4">Share your room code with a friend to start playing!</p>
-            <div className="bg-gray-100 rounded-lg p-3 inline-block">
-              <span className="font-mono text-lg font-bold text-gray-800">{roomId}</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">Players: {players}/2</p>
-          </div>
-        ) : (
-          <div className="text-center py-2">
-            {gameResult ? (
-              <div className="bg-gradient-to-r from-green-100 to-blue-100 rounded-lg p-4">
-                <div className="text-2xl mb-2">🏆</div>
-                <h4 className="text-lg font-bold text-gray-800">{getGameStatus(gameResult).message}</h4>
+    <>
+      <div className="w-full max-w-2xl mx-auto p-4">
+        {/* Game Header */}
+        <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-t-2xl p-6 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
+                <span className="text-white text-xl">♛</span>
               </div>
-            ) : (
-              <div className={`p-4 rounded-lg transition-all duration-300 ${
-                isMyTurn 
-                  ? 'bg-gradient-to-r from-blue-100 to-purple-100 border-2 border-blue-300 shadow-lg' 
-                  : 'bg-gray-50 border-2 border-gray-200'
-              }`}>
-                <div className="flex items-center justify-center space-x-3">
-                  <span className="text-2xl">{turn === 'white' ? '♔' : '♚'}</span>
-                  <div>
-                    <p className="font-semibold text-gray-800">
-                      {isMyTurn ? '✨ Your Turn!' : 'Opponent\'s Turn'}
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      {turn.charAt(0).toUpperCase() + turn.slice(1)} to move
-                    </p>
-                  </div>
-                  {isMyTurn && <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>}
+              <div>
+                 
+
+                <h3 className="text-lg font-bold">Chess Arena</h3>
+                <p className="text-sm text-gray-300">Room: <span className="font-mono text-yellow-400">{roomId}</span></p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></div>
+              <span className="text-sm">{isConnected ? 'Connected' : 'Disconnected'}</span>
+            </div>
+          </div>
+          
+          {/* Player Info */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white/10 rounded-lg p-3">
+              <div className="flex items-center space-x-2 mb-1">
+                <span className="text-2xl">♔</span>
+                <span className="font-semibold">White</span>
+                {color === 'white' && <span className="text-xs bg-blue-500 px-2 py-1 rounded-full">You</span>}
+              </div>
+              {context?.user && color === 'white' && (
+                <p className="text-xs text-gray-300">{context.user.displayName}</p>
+              )}
+            </div>
+            <div className="bg-white/10 rounded-lg p-3">
+              <div className="flex items-center space-x-2 mb-1">
+                <span className="text-2xl">♚</span>
+                <span className="font-semibold">Black</span>
+                {color === 'black' && <span className="text-xs bg-blue-500 px-2 py-1 rounded-full">You</span>}
+              </div>
+              {context?.user && color === 'black' && (
+                <p className="text-xs text-gray-300">{context.user.displayName}</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Game Status */}
+        <div className="bg-white border-x-2 border-gray-200 p-4">
+          {players < 2 ? (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-white text-2xl animate-pulse">⏳</span>
+              </div>
+              <h4 className="text-lg font-semibold text-gray-800 mb-2">Waiting for Opponent</h4>
+              <p className="text-gray-600 mb-4">Share your room code with a friend to start playing!</p>
+              <div className="bg-gray-100 rounded-lg p-3 inline-block">
+                <span className="font-mono text-lg font-bold text-gray-800">{roomId}</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">Players: {players}/2</p>
+            </div>
+          ) : (
+            <div className="text-center py-2">
+              {gameResult ? (
+                <div className="bg-gradient-to-r from-green-100 to-blue-100 rounded-lg p-4">
+                  <div className="text-2xl mb-2">🏆</div>
+                  <h4 className="text-lg font-bold text-gray-800">{getGameStatus(gameResult).message}</h4>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Chess Board */}
-      <div className="bg-white border-x-2 border-gray-200 p-6">
-        {players === 2 ? (
-          <div className="flex justify-center">
-            <div className={`rounded-2xl p-4 transition-all duration-300 ${
-              isMyTurn 
-                ? 'bg-gradient-to-br from-blue-50 to-purple-50 shadow-2xl border-4 border-blue-300' 
-                : 'bg-gradient-to-br from-gray-50 to-gray-100 shadow-lg border-4 border-gray-300'
-            }`}>
-              <Chessboard
-                position={fen}
-                onPieceDrop={onDrop}
-                boardOrientation={color}
-                boardWidth={Math.min(window.innerWidth - 120, 400)}
-                customBoardStyle={{
-                  borderRadius: '12px',
-                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)'
-                }}
-                customDarkSquareStyle={{ backgroundColor: '#B58863' }}
-                customLightSquareStyle={{ backgroundColor: '#F0D9B5' }}
-              />
+              ) : (
+                <div className={`p-4 rounded-lg transition-all duration-300 ${
+                  isMyTurn 
+                    ? 'bg-gradient-to-r from-blue-100 to-purple-100 border-2 border-blue-300 shadow-lg' 
+                    : 'bg-gray-50 border-2 border-gray-200'
+                }`}>
+                  <div className="flex items-center justify-center space-x-3">
+                    <span className="text-2xl">{turn === 'white' ? '♔' : '♚'}</span>
+                    <div>
+                      <p className="font-semibold text-gray-800">
+                        {isMyTurn ? '✨ Your Turn!' : 'Opponent\'s Turn'}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        {turn.charAt(0).toUpperCase() + turn.slice(1)} to move
+                      </p>
+                    </div>
+                    {isMyTurn && <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ) : (
-          <div className="flex justify-center items-center h-96 bg-gray-100 rounded-2xl">
-            <div className="text-center">
-              <div className="w-20 h-20 bg-gray-300 rounded-full flex items-center justify-center mx-auto mb-4">
-                <span className="text-gray-500 text-3xl">♟</span>
-              </div>
-              <p className="text-gray-500">Board will appear when both players join</p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Game Actions */}
-      <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-b-2xl p-6">
-        <div className="flex justify-center space-x-4">
-          <button
-            onClick={() => {
-              setInGame(false);
-              setMode('choose');
-              setGameResult('');
-              setRoomId('');
-              setFen('start');
-              setPlayers(0);
-            }}
-            className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-2 px-6 rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
-          >
-            Leave Game
-          </button>
-          {players === 2 && (
-            <button
-              onClick={() => {
-                if (confirm('Are you sure you want to restart the game?')) {
-                  // Emit restart event to server if implemented
-                  setFen('start');
-                  setGameResult('');
-                }
-              }}
-              className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold py-2 px-6 rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
-            >
-              Restart
-            </button>
           )}
         </div>
+
+        {/* Chess Board */}
+        <div className="bg-white border-x-2 border-gray-200 p-6">
+          {players === 2 ? (
+            <div className="flex justify-center">
+              <div className={`rounded-2xl p-4 transition-all duration-300 ${
+                isMyTurn 
+                  ? 'bg-gradient-to-br from-blue-50 to-purple-50 shadow-2xl border-4 border-blue-300' 
+                  : 'bg-gradient-to-br from-gray-50 to-gray-100 shadow-lg border-4 border-gray-300'
+              }`}>
+                <Chessboard
+                  position={fen}
+                  onPieceDrop={onDrop}
+                  boardOrientation={color}
+                  boardWidth={Math.min(window.innerWidth - 120, 400)}
+                  customBoardStyle={{
+                    borderRadius: '12px',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)'
+                  }}
+                  customDarkSquareStyle={{ backgroundColor: '#B58863' }}
+                  customLightSquareStyle={{ backgroundColor: '#F0D9B5' }}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center items-center h-96 bg-gray-100 rounded-2xl">
+              <div className="text-center">
+                <div className="w-20 h-20 bg-gray-300 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-gray-500 text-3xl">♟</span>
+                </div>
+                <p className="text-gray-500">Board will appear when both players join</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Game Actions */}
+        <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-b-2xl p-6">
+          <div className="flex justify-center space-x-4">
+            <button
+              onClick={() => {
+                setInGame(false);
+                setMode('choose');
+                setGameResult('');
+                setRoomId('');
+                setFen('start');
+                setPlayers(0);
+              }}
+              className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-2 px-6 rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+            >
+              Leave Game
+            </button>
+            {players === 2 && (
+              <button
+                onClick={() => {
+                  if (confirm('Are you sure you want to restart the game?')) {
+                    // Emit restart event to server if implemented
+                    setFen('start');
+                    setGameResult('');
+                  }
+                }}
+                className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold py-2 px-6 rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+              >
+                Restart
+              </button>
+            )}
+          </div>
+        </div>
+       
       </div>
-    </div>
+      
+    </>
   );
 } 
